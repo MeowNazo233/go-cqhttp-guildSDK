@@ -2,10 +2,11 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/widuu/gojson"
-	"net/http"
 )
 
 //设置websocket
@@ -30,6 +31,7 @@ func ping(c *gin.Context) {
 		if err != nil {
 			break
 		}
+		send_message := ""
 		json := string(message[:])
 		retcode := gojson.Json(json).Get("retcode").Tostring()
 
@@ -46,9 +48,16 @@ func ping(c *gin.Context) {
 				time := gojson.Json(json).Get("time").Tostring()
 				fmt.Println("[Time-" + time + "]收到来自频道分组：" + guild_id + "下子频道：" + channel_id + "内用户：" + user_id + "发送的消息：" + message_text)
 				fmt.Println("来源机器人：" + self_tiny_id + "[" + self_id + "]")
+
+				if message_text == "hello" {
+					//收到来自频道 Harmonica(40759201636795692) 子频道 测试频道(1392839) 内 Harmonica(144115218677824752) 的消息: 1
+					send_message = `{"action":"send_guild_channel_msg","params":{"guild_id":40759201636795692,"channel_id":1392839,"message":"hello world"}}`
+				}
+				fmt.Println(send_message)
 			}
 		}
-		returnbyte := []byte("")
+
+		returnbyte := []byte(send_message)
 		err = ws.WriteMessage(mt, returnbyte)
 		if err != nil {
 			break
