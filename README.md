@@ -9,4 +9,4 @@ go-cqhttp设置为
     event: 
     reconnect-interval: 3000
     middlewares:
-      <<: *default 
+    <<: *default 
