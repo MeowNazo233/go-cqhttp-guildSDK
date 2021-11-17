@@ -1,4 +1,4 @@
-module websocket
+module NazoBot
 
 go 1.17
 
