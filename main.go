@@ -1,82 +1,116 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/http"
+	"go-cqhttp-guildSDK/functions"
+	"log"
+	"net/url"
+	"sync"
+	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
 
-//创建消息格式
-type guild_message_sender struct {
-	Nickname string `json:"nickname"`
-	User_id  uint64 `json:"user_id"`
+type websocketClientManager struct {
+	conn        *websocket.Conn
+	addr        *string
+	path        string
+	sendMsgChan chan string
+	recvMsgChan chan string
+	isAlive     bool
+	timeout     int
 }
 
-type guild_message struct {
-	Channel_id   uint64               `json:"channel_id"`
-	Guild_id     uint64               `json:"guild_id"`
-	Message      string               `json:"message"`
-	Message_id   string               `json:"message_id"`
-	Message_type string               `json:"message_type"`
-	Post_type    string               `json:"post_type"`
-	Self_id      uint64               `json:"self_id"`
-	Self_tiny_id uint64               `json:"self_tiny_id"`
-	Sender       guild_message_sender `json:"sender"`
-	Sub_type     string               `json:"sub_type"`
-	Time         uint64               `json:"time"`
-	User_id      uint64               `json:"user_id"`
-}
-
-//设置websocket
-//CheckOrigin防止跨站点的请求伪造
-var upGrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
-}
-
-//websocket实现
-func ping(c *gin.Context) {
-
-	//升级get请求为webSocket协议
-	ws, err := upGrader.Upgrade(c.Writer, c.Request, nil)
-	if err != nil {
-		return
+// 构造函数
+func NewWsClientManager(addrIp, addrPort, path string, timeout int) *websocketClientManager {
+	addrString := addrIp + ":" + addrPort
+	var sendChan = make(chan string, 10)
+	var recvChan = make(chan string, 10)
+	var conn *websocket.Conn
+	return &websocketClientManager{
+		addr:        &addrString,
+		path:        path,
+		conn:        conn,
+		sendMsgChan: sendChan,
+		recvMsgChan: recvChan,
+		isAlive:     false,
+		timeout:     timeout,
 	}
-	defer ws.Close() //返回前关闭
-	for {
-		//读取ws中的数据，message为byte
-		mt, message, err := ws.ReadMessage()
-		if err != nil {
-			break
-		}
-		send_message := ""
-		json_text := string(message[:])
-		var guild_info guild_message
-		json_err := json.Unmarshal([]byte(json_text), &guild_info)
-		if json_err != nil {
-			fmt.Println(json_err)
-		}
+}
 
-		if guild_info.Message_type == "guild" {
-			if guild_info.Message == "hello" { //判断收到的消息
-				send_message = fmt.Sprintf(`{"action":"send_guild_channel_msg","params":{"guild_id":%d,"channel_id":%d,"message":"%s"}}`, guild_info.Guild_id, guild_info.Channel_id, "Hello World")
-				//创建发送消息，可内置函数处理
+// 链接服务端
+func (wsc *websocketClientManager) dail() {
+	var err error
+	u := url.URL{Scheme: "ws", Host: *wsc.addr, Path: wsc.path}
+	log.Printf("connecting to %s", u.String())
+	wsc.conn, _, err = websocket.DefaultDialer.Dial(u.String(), nil)
+	if err != nil {
+		fmt.Println(err)
+		return
+
+	}
+	wsc.isAlive = true
+	log.Printf("connecting to %s 链接成功！！！", u.String())
+
+}
+
+// 发送消息
+func (wsc *websocketClientManager) sendMsgThread() {
+	go func() {
+		for {
+			msg := <-wsc.sendMsgChan
+			err := wsc.conn.WriteMessage(websocket.TextMessage, []byte(msg))
+			if err != nil {
+				log.Println("write:", err)
+				continue
 			}
 		}
-		returnbyte := []byte(send_message)
-		err = ws.WriteMessage(mt, returnbyte)
-		if err != nil {
-			break
+	}()
+}
+
+// 读取消息
+func (wsc *websocketClientManager) readMsgThread() {
+	go func() {
+		for {
+			if wsc.conn != nil {
+				_, message, err := wsc.conn.ReadMessage()
+				if err != nil {
+					log.Println("read:", err)
+					wsc.isAlive = false
+					// 出现错误，退出读取，尝试重连
+					break
+				}
+				log.Printf("recv: %s", message)
+				// 需要读取数据，不然会阻塞
+				wsc.recvMsgChan <- string(message)
+				new_msg := string(functions.GetMessage(string(message)))
+				if new_msg != "" {
+					wsc.sendMsgChan <- new_msg
+					wsc.sendMsgThread()
+				}
+
+			}
+
 		}
+	}()
+}
+
+// 开启服务并重连
+func (wsc *websocketClientManager) start() {
+	for {
+		if wsc.isAlive == false {
+			wsc.dail()
+			wsc.sendMsgThread()
+			wsc.readMsgThread()
+		}
+		time.Sleep(time.Second * time.Duration(wsc.timeout))
 	}
 }
 
 func main() {
-	r := gin.Default()
-	r.GET("/ws", ping)
-	r.Run(":7790")
+	wsc := NewWsClientManager("127.0.0.1", "6700", "/v1", 10)
+	wsc.start()
+	var w1 sync.WaitGroup
+	w1.Add(1)
+	w1.Wait()
 }
